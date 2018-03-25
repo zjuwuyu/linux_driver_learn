@@ -5,7 +5,12 @@
 #include <linux/device.h>
 #include <linux/fs.h>
 #include <linux/cdev.h>
-
+#include <asm-generic/uaccess.h>
+#include <linux/semaphore.h>
+#include <linux/kthread.h>
+#include <linux/delay.h>
+#include <linux/completion.h>
+#define DEVICE_NAME "wuyu_device"
 
 
 struct list_head g_list;
@@ -18,11 +23,15 @@ typedef struct test_struct {
 }test_struct_t;
 
 struct test_struct1
-{
+{
 	int id;
 	char name[20];
 	dev_t devno;
 	int val;
+	struct task_struct *write_thread;
+	struct task_struct *read_thread;
+	struct completion cplt;
+	struct semaphore sem;
 	struct device *dev;
 	struct cdev *cdev;
 };
@@ -59,9 +68,21 @@ int test1_open(struct inode * node, struct file *filp)
 	my_dbg("wuyu test1_open is called\n");
 	return 0;
 }
+long test1_unlocked_ioctl(struct file *filp, unsigned int cmd, unsigned long val)
+{
+	int *p = (int*)val;
+	int k = 0;
+	copy_from_user(&k, p, sizeof(int));
+	my_vdbg("k=%d\n", k);
+	k = 8888;
+	//copy_to_user(p, &k, sizeof(int));
+	*p = 9999;
+	return 3;
+}
 
 struct file_operations fops = {
 	.open = test1_open,
+	.unlocked_ioctl = test1_unlocked_ioctl,
 };
 void create_test_struct(const char *name, int id) {
 	test_struct_t *test = kzalloc(sizeof(test_struct_t),GFP_KERNEL);
@@ -94,6 +115,34 @@ ssize_t hello_store(struct device *dev, struct device_attribute *attr,
 		 
 static DEVICE_ATTR (hello, S_IWUSR | S_IRUGO, hello_show, hello_store);
 
+
+static int write_thread(void *data)
+{
+	struct test_struct1 *tstruct = (struct test_struct1*)data;
+	while(1){
+		if(kthread_should_stop())
+			break;
+		my_vdbg("this is %s\n", __FUNCTION__);
+		complete(&tstruct->cplt);
+		//mdelay(100);
+		
+	}
+	return 0;
+}
+
+static int read_thread(void *data)
+{
+	struct test_struct1 *tstruct = (struct test_struct1*)data;
+	while(1){
+		if(kthread_should_stop())
+			break;
+		wait_for_completion(&tstruct->cplt);
+		my_vdbg("this is %s\n", __FUNCTION__);
+		
+	}
+	return 0;
+}
+
 static int hello_init(void)
 {
 	int i =0;
@@ -101,11 +150,16 @@ static int hello_init(void)
 	int ret = 0;
 	printk(KERN_ALERT"hello init called\n");
 	INIT_LIST_HEAD(&g_list);
+	
 	test_struct1_p = kzalloc(sizeof(struct test_struct1), GFP_KERNEL);
 	if(NULL == test_struct1_p) {
 		my_dbg("test_struct1_p is NULL\n");
 		goto exit;
 	}
+	sema_init(&test_struct1_p->sem, 1);
+	init_completion(&test_struct1_p->cplt);
+	down_interruptible(&test_struct1_p->sem);
+	
 	test_struct1_p->cdev = cdev_alloc();
 	ret = alloc_chrdev_region(&test_struct1_p->devno, 0, 1, "wuyu_dev_test1");
 	if(ret < 0) {
@@ -120,7 +174,7 @@ static int hello_init(void)
 		my_dbg("cdev_add failed\n");
 		goto exit;
 	}
-
+	
 	create_test_struct("test0", 0);
 	create_test_struct("test1", 1);
 	create_test_struct("test2", 2);
@@ -137,7 +191,7 @@ static int hello_init(void)
 		my_dbg("create wuyu_class failed\n");
 		goto exit;
 	}
-	test_struct1_p->dev = device_create(wuyu_class, NULL, test_struct1_p->devno,  test_struct1_p, "wuyu_device");
+	test_struct1_p->dev = device_create(wuyu_class, NULL, test_struct1_p->devno,  test_struct1_p, DEVICE_NAME);
 	if(NULL == test_struct1_p->dev) {
 		my_dbg("device_create  failed\n");
 		goto exit;
@@ -149,7 +203,12 @@ static int hello_init(void)
 		goto exit;
 	}
 
+	test_struct1_p->write_thread = kthread_run(write_thread,test_struct1_p,"wuyu_write_thread");
+	test_struct1_p->read_thread = kthread_run(read_thread,test_struct1_p,"wuyu_read_thread");
+	
+
 exit:
+	up(&test_struct1_p->sem);
 	return 0;
 }
 
@@ -164,6 +223,8 @@ static void hello_exit(void)
 			kfree(p);
 		}
 	}
+	kthread_stop(test_struct1_p->write_thread);
+	kthread_stop(test_struct1_p->read_thread);
 	cdev_del(test_struct1_p->cdev);
 	unregister_chrdev_region (test_struct1_p->devno, 1);
 	kfree(test_struct1_p);
@@ -171,6 +232,7 @@ static void hello_exit(void)
 	device_del (test_struct1_p->dev);
 
 	class_destroy (wuyu_class);
+	
 	return;
 }
 
