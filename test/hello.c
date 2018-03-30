@@ -5,7 +5,7 @@
 #include <linux/device.h>
 #include <linux/fs.h>
 #include <linux/cdev.h>
-#include <asm-generic/uaccess.h>
+//#include <asm-generic/uaccess.h>
 #include <linux/semaphore.h>
 #include <linux/kthread.h>
 #include <linux/delay.h>
@@ -26,8 +26,13 @@ struct test_struct1
 {
 	int id;
 	char name[20];
+	char g_buf[100];
+	int g_buf_index;
+	int can_read_flag;
 	dev_t devno;
 	int val;
+	wait_queue_head_t wq;
+	spinlock_t slock;
 	struct task_struct *write_thread;
 	struct task_struct *read_thread;
 	struct completion cplt;
@@ -37,8 +42,8 @@ struct test_struct1
 };
 
 struct test_struct1 *test_struct1_p = NULL;
-//ssize_t (*read) (struct file *, char __user *, size_t, loff_t *);
-//ssize_t (*write) (struct file *, const char __user *, size_t, loff_t *);
+
+
 //int (*release) (struct inode *, struct file *);
 
 
@@ -66,8 +71,42 @@ void my_printk(const char *fmt, ...)
 int test1_open(struct inode * node, struct file *filp)
 {
 	my_dbg("wuyu test1_open is called\n");
+	filp->private_data = test_struct1_p;
+	test_struct1_p->g_buf_index = 0;
+	test_struct1_p->can_read_flag = 0;
+	
 	return 0;
 }
+ssize_t test1_read (struct file *filp, char __user *buf, size_t len, loff_t *ppos)
+{
+	struct test_struct1 *p = filp->private_data;
+	int ret = 0;
+	//my_vdbg("wuyu read, before wait, len=%d, p->g_buf_index =%d\n", len, p->g_buf_index );
+	spin_lock(&p->slock);
+	wait_event_interruptible (p->wq, (p->g_buf_index > 0));
+	//my_vdbg("wuyu read, after wait, len=%d, p->g_buf_index =%d\n", len, p->g_buf_index );
+	ret = p->g_buf_index;
+	//copy_to_user(buf, p->g_buf, p->g_buf_index);
+	copy_to_user(buf, p->g_buf, p->g_buf_index);
+	p->g_buf_index = 0;
+	spin_unlock (&p->slock);
+	return ret;
+}
+ssize_t test1_write (struct file *filp, const char __user *buf, size_t len, loff_t *ppos)
+{
+	struct test_struct1 *p = filp->private_data;
+	//my_vdbg("wuyu before write lock\n");
+	spin_lock(&p->slock);
+	my_vdbg("wuyu after write lock\n");
+	copy_from_user(p->g_buf, buf, len);
+	//my_vdbg("wuyu write, before wait, len = %d\n", len);
+	p->g_buf_index = len;
+	
+	wake_up_interruptible (&p->wq);
+	spin_unlock (&p->slock);
+	return p->g_buf_index;
+}
+
 long test1_unlocked_ioctl(struct file *filp, unsigned int cmd, unsigned long val)
 {
 	int *p = (int*)val;
@@ -82,6 +121,8 @@ long test1_unlocked_ioctl(struct file *filp, unsigned int cmd, unsigned long val
 
 struct file_operations fops = {
 	.open = test1_open,
+	.read = test1_read,
+	.write = test1_write,
 	.unlocked_ioctl = test1_unlocked_ioctl,
 };
 void create_test_struct(const char *name, int id) {
@@ -119,27 +160,27 @@ static DEVICE_ATTR (hello, S_IWUSR | S_IRUGO, hello_show, hello_store);
 static int write_thread(void *data)
 {
 	struct test_struct1 *tstruct = (struct test_struct1*)data;
-	while(1){
-		if(kthread_should_stop())
-			break;
-		my_vdbg("this is %s\n", __FUNCTION__);
-		complete(&tstruct->cplt);
-		//mdelay(100);
-		
-	}
+//	while(1){
+//		if(kthread_should_stop())
+//			break;
+//		my_vdbg("this is %s\n", __FUNCTION__);
+//		complete(&tstruct->cplt);
+//		//mdelay(100);
+//		
+//	}
 	return 0;
 }
 
 static int read_thread(void *data)
 {
 	struct test_struct1 *tstruct = (struct test_struct1*)data;
-	while(1){
-		if(kthread_should_stop())
-			break;
-		wait_for_completion(&tstruct->cplt);
-		my_vdbg("this is %s\n", __FUNCTION__);
-		
-	}
+//	while(1){
+//		if(kthread_should_stop())
+//			break;
+//		wait_for_completion(&tstruct->cplt);
+//		my_vdbg("this is %s\n", __FUNCTION__);
+//		
+//	}
 	return 0;
 }
 
@@ -158,6 +199,8 @@ static int hello_init(void)
 	}
 	sema_init(&test_struct1_p->sem, 1);
 	init_completion(&test_struct1_p->cplt);
+	init_waitqueue_head (&test_struct1_p->wq);
+	spin_lock_init (&test_struct1_p->slock);
 	down_interruptible(&test_struct1_p->sem);
 	
 	test_struct1_p->cdev = cdev_alloc();
