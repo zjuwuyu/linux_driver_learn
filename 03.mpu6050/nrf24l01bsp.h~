@@ -1,0 +1,133 @@
+#include <linux/module.h>
+#include <linux/kernel.h>
+#include <linux/init.h>
+#include <linux/fs.h>
+#include <linux/cdev.h>
+#include <linux/device.h>
+#include <mach/gpio.h>
+#include <plat/gpio-cfg.h>
+#include <linux/miscdevice.h>
+#include <linux/platform_device.h>
+#include <mach/regs-gpio.h>
+#include <asm/io.h>
+#include <linux/regulator/consumer.h>
+#include <linux/delay.h>
+
+
+#include <linux/fb.h>
+#include <linux/backlight.h>
+#include <linux/err.h>
+
+#include <linux/slab.h>
+#include <linux/miscdevice.h>
+
+#include <asm/uaccess.h>
+
+#define u32 	unsigned long int 
+#define u16 	unsigned int 
+#define u8 	unsigned char
+
+#define s32  	long  int
+#define s16 	int
+#define s8 	char
+
+#define GPA0_Base_Address	(u32)0x11400000
+
+#define GP_OUTPUT		(u32)0x01
+#define GP_INPUT		(u32)0x00
+#define GP_EXINT		(u32)0x0F
+
+#define SET_TX_MODE		(u32)0x01
+#define SET_RX_MODE		(u32)0x08
+
+#define READ_IRQ		(u32)0x03
+#define READ_STA		(u32)0x04
+
+#define NO_IRQ			(u32)0x05
+#define HAVE_IRQ		(u32)0x06
+
+#define WRITE_STA		(u32)0x07
+
+#define WRITE_TX_ADD		(u32)0x010
+#define WRITE_RX_ADD		(u32)0x011
+
+#define POWER_DOWN		(u32)0x012
+
+typedef struct
+{
+volatile unsigned long int CON;
+volatile unsigned long int DAT;
+volatile unsigned long int PUD;
+volatile unsigned long int DRV;
+volatile unsigned long int CONPDN;
+volatile unsigned long int PUDPDN;
+}GPIO_TypeDef;
+
+//*********************************************NRF24L01*************************************
+#define TX_ADR_WIDTH    5   	// 5 u8s TX address width
+#define RX_ADR_WIDTH    5   	// 5 u8s RX address width
+#define TX_PLOAD_WIDTH  32  	// 20 u8s TX payload
+#define RX_PLOAD_WIDTH  32  	// 20 u8s TX payload
+
+//***************************************NRF24L01?????*******************************************************
+#define READ_RE        0x00  	// ??????
+#define WRITE_RE       0x20 	// ??????
+#define RD_RX_PLOAD     0x61  	// ????????
+#define WR_TX_PLOAD     0xA0  	// ???????
+#define FLUSH_TX        0xE1 	// ???? FIFO??
+#define FLUSH_RX        0xE2  	// ???? FIFO??
+#define REUSE_TX_PL     0xE3  	// ??????????
+#define NOP             0xFF  	// ??
+//*************************************SPI(nRF24L01)?????****************************************************
+#define CONFIG          0x00  // ??????,CRC??????????????
+#define EN_AA           0x01  // ????????
+#define EN_RXADDR       0x02  // ??????
+#define SETUP_AW        0x03  // ????????
+#define SETUP_RETR      0x04  // ????????
+#define RF_CH           0x05  // ??????
+#define RF_SETUP        0x06  // ???????????
+#define STATUS          0x07  // ?????
+#define OBSERVE_TX      0x08  // ??????
+#define CD              0x09  // ????
+#define RX_ADDR_P0      0x0A  // ??0??????
+#define RX_ADDR_P1      0x0B  // ??1??????
+#define RX_ADDR_P2      0x0C  // ??2??????
+#define RX_ADDR_P3      0x0D  // ??3??????
+#define RX_ADDR_P4      0x0E  // ??4??????
+#define RX_ADDR_P5      0x0F  // ??5??????
+#define TX_ADDR         0x10  // ???????
+#define RX_PW_P0        0x11  // ????0??????
+#define RX_PW_P1        0x12  // ????0??????
+#define RX_PW_P2        0x13  // ????0??????
+#define RX_PW_P3        0x14  // ????0??????
+#define RX_PW_P4        0x15  // ????0??????
+#define RX_PW_P5        0x16  // ????0??????
+#define FIFO_STATUS     0x17  // FIFO???????????
+
+void Nrf24l01_gpio_init(void);
+unsigned char SPI_SendRcvByte(unsigned char  data);
+
+
+
+extern u8 TxBuf[32];
+extern u8 RxBuf[32];
+extern u8 TX_ADDRESS[5];	
+extern u8 RX_ADDRESS[5];	
+
+void init_NRF24L01(void);
+
+u8 SPI_Read(u8 reg);
+void SetRX_Mode(void);
+void SetTX_Mode(void);
+u8 SPI_RW_Reg(u8 reg, u8 value);
+u8 SPI_Read_Buf(u8 reg, u8 *pBuf, u8 u8s);
+u8 SPI_Write_Buf(u8 reg, u8 *pBuf, u8 u8s);
+unsigned char nRF24L01_RxPacket(unsigned char* rx_buf);
+void nRF24L01_TxPacket(unsigned char * tx_buf);
+void nRF24L01_TxPacket(unsigned char * tx_buf);
+u8 Read_Status(void);	
+void Write_Status(u8 date);
+u8 Read_Irq(void);
+void power_down(void);
+
+

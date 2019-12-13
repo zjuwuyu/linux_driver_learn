@@ -1,0 +1,107 @@
+#include"nrf24l01bsp.h"
+
+
+int HELLO_MAJOR = 0;
+int HELLO_MINOR = 0;
+int NUMBER_OF_DEVICES = 2;
+ 
+struct class *my_class;
+struct cdev cdev;
+dev_t devno;
+/*************************************************************************************/ 
+
+
+#define DRIVER_NAME "nrf24l01"
+
+int nrf_open(struct inode *inode,struct file *filp)
+{
+	Nrf24l01_gpio_init();
+	printk("nrf24l01 Initialize\n");
+	return nonseekable_open(inode,filp);
+}
+
+long nrf_ioctl(struct file *filp,unsigned int cmd,unsigned long arg)
+{
+	switch(cmd)
+	{
+		
+		case (SET_TX_MODE):SetTX_Mode();break;
+		case (SET_RX_MODE):SetRX_Mode();break;
+		case (READ_IRQ):return Read_Irq();
+		case (READ_STA):return Read_Status();
+		case (WRITE_STA):Write_Status(arg);break;
+		case  WRITE_TX_ADD:TX_ADDRESS[4]=arg;SPI_Write_Buf(WRITE_RE + TX_ADDR, TX_ADDRESS, TX_ADR_WIDTH);break;
+		case  WRITE_RX_ADD:RX_ADDRESS[4]=arg;SPI_Write_Buf(WRITE_RE + RX_ADDR_P0, RX_ADDRESS, RX_ADR_WIDTH);break;
+		case  POWER_DOWN:power_down();break;
+		default:
+			return 255;
+	}
+	return 0;
+}
+int nrf_read(struct file *filp, char *buffer,size_t count, loff_t *ppos)
+{
+	nRF24L01_RxPacket(RxBuf);
+	return copy_to_user(buffer, RxBuf, count);
+}
+int nrf_write(struct file *filp, char *buffer, size_t count, loff_t *ppos)
+{
+	int tem;
+	tem=copy_from_user(TxBuf, buffer, count);
+	nRF24L01_TxPacket(TxBuf);
+	return tem;
+}
+struct file_operations hello_fops = {
+	.owner = THIS_MODULE,
+	.read = nrf_read,
+	.write = nrf_write,
+	.open 	= nrf_open,
+	.unlocked_ioctl = nrf_ioctl,
+};
+
+
+/**************************************************************************************/
+static int __init hello_init (void)
+{
+    int result;
+    devno = MKDEV(HELLO_MAJOR, HELLO_MINOR);
+    if (HELLO_MAJOR)
+        result = register_chrdev_region(devno, 2, "nrf24l01");
+    else
+    {
+        result = alloc_chrdev_region(&devno, 0, 2, "nrf24l01");
+        HELLO_MAJOR = MAJOR(devno);
+    }  
+    printk("MAJOR IS %d\n",HELLO_MAJOR);
+    my_class = class_create(THIS_MODULE,"nrf24l01_class");  //类名为
+    if(IS_ERR(my_class)) 
+    {
+        printk("Err: failed in creating class.\n");
+        return -1; 
+    }
+    device_create(my_class,NULL,devno,NULL,"nrf24l01");      //设备名为ledxy
+    if (result<0) 
+    {
+        printk (KERN_WARNING "hello: can't get major number %d\n", HELLO_MAJOR);
+        return result;
+    }
+ 
+    cdev_init(&cdev, &hello_fops);
+    cdev.owner = THIS_MODULE;
+    cdev_add(&cdev, devno, NUMBER_OF_DEVICES);
+    printk (KERN_INFO "nrf24l01 driver Registered\n");
+    return 0;
+}
+ 
+static void __exit hello_exit (void)
+{
+    cdev_del (&cdev);
+    device_destroy(my_class, devno);         //delete device node under /dev//必须先删除设备，再删除class类
+    class_destroy(my_class);                 //delete class created by us
+    unregister_chrdev_region (devno,NUMBER_OF_DEVICES);
+    printk (KERN_INFO "char driver cleaned up\n");
+}
+ 
+module_init (hello_init);
+module_exit (hello_exit);
+ 
+MODULE_LICENSE ("GPL");

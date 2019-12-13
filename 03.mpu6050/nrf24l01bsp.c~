@@ -1,0 +1,200 @@
+#include"nrf24l01bsp.h"
+GPIO_TypeDef *GPIOA;
+u8 RxBuf[32];
+u8 TxBuf[32];
+
+u8 TX_ADDRESS[TX_ADR_WIDTH]= {0x11,0x22,0x33,0x44,0x01};	
+u8 RX_ADDRESS[RX_ADR_WIDTH]= {0x11,0x22,0x33,0x44,0x01};	
+
+#define CLE_CE   GPIOA->DAT&=~(1<<0)
+#define SET_CE  GPIOA->DAT|=(1<<0)
+
+#define CLE_CSN  GPIOA->DAT&=~(1<<1)
+#define SET_CSN GPIOA->DAT|=(1<<1)
+
+#define CLE_SCK   GPIOA->DAT&=~(1<<2)
+#define SET_SCK  GPIOA->DAT|=(1<<2)
+
+#define CLE_MOSI  GPIOA->DAT&=~(1<<3)
+#define SET_MOSI  GPIOA->DAT|=(1<<3)
+
+#define MISO  GPIOA->DAT&(1<<4)
+#define IRQ   GPIOA->DAT&(1<<5)
+
+void Nrf24l01_gpio_init()
+{
+	GPIOA=(GPIO_TypeDef *)(ioremap(GPA0_Base_Address,24));
+
+	GPIOA->CON&=~((u32)0xf<<(0*4));
+	GPIOA->CON|=(GP_OUTPUT<<(0*4));		//GPIOA_0设为输出模式
+
+	GPIOA->CON&=~((u32)0xf<<(1*4));
+	GPIOA->CON|=(GP_OUTPUT<<(1*4));		//GPIOA_1设为输出模式
+
+	GPIOA->CON&=~((u32)0xf<<(2*4));
+	GPIOA->CON|=(GP_OUTPUT<<(2*4));		//GPIOA_2设为输出模式
+
+	GPIOA->CON&=~((u32)0xf<<(3*4));
+	GPIOA->CON|=(GP_OUTPUT<<(3*4));		//GPIOA_3设为输出模式
+
+	GPIOA->CON&=~((u32)0xf<<(4*4));		//GPIOA_4设为输入模式
+
+	GPIOA->CON&=~((u32)0xf<<(5*4));		//GPIOA_5设为输入模式
+	init_NRF24L01();
+	printk("Nrf24l01_gpio_init..ok\n");
+}
+
+unsigned char SPI_SendRcvByte(unsigned char  data)
+{
+	unsigned char bit_ctr,TEMP=0;
+   	for(bit_ctr=0;bit_ctr<8;bit_ctr++) // output 8-bit
+   	{        TEMP<<=1;
+		 if(data&0x80){SET_MOSI;}
+                 else{CLE_MOSI;}
+		//udelay(6);
+                 SET_SCK;
+		//udelay(6);
+                 if(MISO)
+                 TEMP|=1;
+                 CLE_SCK;
+		//udelay(6);
+                 data<<=1;
+                 
+   	}
+    return(TEMP);           		  // return read uchar
+}
+
+void init_NRF24L01(void)
+{
+	TX_ADDRESS[0]=0x11;	
+	RX_ADDRESS[0]=0x11;
+
+	TX_ADDRESS[1]=0x22;	
+	RX_ADDRESS[1]=0x22;
+
+	TX_ADDRESS[2]=0x33;	
+	RX_ADDRESS[2]=0x33;
+
+	TX_ADDRESS[3]=0x44;	
+	RX_ADDRESS[3]=0x44;
+
+	TX_ADDRESS[4]= 0x01;
+	RX_ADDRESS[4]= 0x01;
+	CLE_SCK;
+ 	CLE_CE;   
+	SET_CSN;   
+	mdelay(60); 
+	SPI_Write_Buf(WRITE_RE + TX_ADDR, TX_ADDRESS, TX_ADR_WIDTH);    	
+	SPI_Write_Buf(WRITE_RE + RX_ADDR_P0, RX_ADDRESS, RX_ADR_WIDTH); 
+	SPI_RW_Reg(WRITE_RE + EN_AA, 0x01);      	
+	SPI_RW_Reg(WRITE_RE + EN_RXADDR, 0x01); 
+	SPI_RW_Reg(WRITE_RE + RF_CH, 0);        
+	SPI_RW_Reg(WRITE_RE + RX_PW_P0, RX_PLOAD_WIDTH);
+	SPI_RW_Reg(WRITE_RE + RF_SETUP, 0x07);   		
+	SPI_RW_Reg(WRITE_RE + CONFIG, 0x0e);   	
+}
+
+u8 SPI_Read(u8 reg)
+{
+	u8 reg_val;
+	CLE_CSN;         
+	SPI_SendRcvByte(reg);            
+	reg_val = SPI_SendRcvByte(0);  
+	SET_CSN;               
+	return(reg_val);       
+}
+
+u8 SPI_RW_Reg(u8 reg, u8 value)
+{
+	u8 status;
+	
+	CLE_CSN;                   // CSN low, init SPI transaction
+	status = SPI_SendRcvByte(reg);      // select register
+	SPI_SendRcvByte(value);             // ..and write value to it..
+	SET_CSN;                   // CSN high again
+	
+	return(status);            // return nRF24L01 status u8
+}
+
+u8 SPI_Read_Buf(u8 reg, u8 *pBuf, u8 u8s)
+{
+	u8 status,u8_ctr;	
+	CLE_CSN;                    		// Set CSN low, init SPI tranaction
+	status = SPI_SendRcvByte(reg);       		// Select register to write to and read status u8	
+	for(u8_ctr=0;u8_ctr<u8s;u8_ctr++)
+		pBuf[u8_ctr] = SPI_SendRcvByte(0);   	
+	SET_CSN;                           
+	return(status);                   
+}
+u8 SPI_Write_Buf(u8 reg, u8 *pBuf, u8 u8s)
+{
+	u8 status,u8_ctr;
+	CLE_CSN;                 
+	status = SPI_SendRcvByte(reg);   
+	for(u8_ctr=0; u8_ctr<u8s; u8_ctr++) 
+	SPI_SendRcvByte(*pBuf++);
+	SET_CSN;         
+	return(status);   
+}
+void SetRX_Mode(void)
+{
+	CLE_CE;
+	SPI_RW_Reg(WRITE_RE + CONFIG, 0x0f);   	
+	SET_CE; 
+	mdelay(6);   
+}
+
+void SetTX_Mode(void)
+{
+ 	CLE_CE;   
+	SET_CSN; 
+	SPI_RW_Reg(WRITE_RE + CONFIG, 0x0e);   	
+	mdelay(6);   
+}
+
+u8 Read_Status()
+{
+	return SPI_Read(STATUS);
+}
+u8 Read_Irq()
+{
+	if(IRQ)	return NO_IRQ;
+	else	return HAVE_IRQ;
+}		
+void Write_Status(u8 date)
+{
+	SPI_RW_Reg(WRITE_RE+STATUS,date); 
+}
+ 
+void power_down()
+{
+	SPI_RW_Reg(WRITE_RE + CONFIG, 0x00);   	
+}
+unsigned char nRF24L01_RxPacket(unsigned char* rx_buf)
+{
+
+	CLE_CE; 			
+	SPI_Read_Buf(RD_RX_PLOAD,rx_buf,TX_PLOAD_WIDTH);
+	SET_CE; 
+  	return 0;
+}
+void nRF24L01_TxPacket(unsigned char * tx_buf)
+{
+	u8 *pBuf;u8 u8_ctr;	
+	CLE_CE;		
+	pBuf=TX_ADDRESS;
+	CLE_CSN;                 
+	SPI_SendRcvByte(WRITE_RE + RX_ADDR_P0);   
+	for(u8_ctr=0; u8_ctr<TX_ADR_WIDTH; u8_ctr++)
+	SPI_SendRcvByte(*pBuf++);	
+	SET_CSN;         
+	pBuf=tx_buf;
+	CLE_CSN;                 
+	SPI_SendRcvByte(WR_TX_PLOAD);   
+	for(u8_ctr=0;u8_ctr<TX_PLOAD_WIDTH; u8_ctr++)
+	SPI_SendRcvByte(*pBuf++);
+	SET_CSN;   
+	SET_CE;	
+}
+
+

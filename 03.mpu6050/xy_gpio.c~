@@ -1,0 +1,99 @@
+#include"gpio.h"
+
+
+int HELLO_MAJOR = 0;
+int HELLO_MINOR = 0;
+int NUMBER_OF_DEVICES = 2;
+ 
+struct class *my_class;
+struct cdev cdev;
+dev_t devno;
+/*************************************************************************************/ 
+
+
+#define DRIVER_NAME "gpioxy"
+
+
+
+int leds_open(struct inode *inode,struct file *filp)
+{
+	printk("leds Initialize\n");
+	return nonseekable_open(inode,filp);
+}
+
+long leds_ioctl(struct file *filp,unsigned int cmd,unsigned long arg)
+{
+//	printk("debug: leds_ioctl cmd is %d\n" , cmd);
+
+	switch(cmd)
+	{
+		
+		case PullDown_CMD:		GPIO_Set_PuPd((arg&0XF0)>>4,(arg&0X0F),PullDown);break;
+		case PullUp_CMD:		GPIO_Set_PuPd((arg&0XF0)>>4,(arg&0X0F),PullUp);break;
+		case NoPull_CMD:		GPIO_Set_PuPd((arg&0XF0)>>4,(arg&0X0F),NoPull);break;
+		case GPIO_OUTPUT_CMD:		GPIO_Set_Mode((arg&0XF0)>>4,(arg&0X0F),GP_OUTPUT);break;
+		case GPIO_INPUT_CMD:		GPIO_Set_Mode((arg&0XF0)>>4,(arg&0X0F),GP_INPUT);break;
+		case GPIO_EXINT_CMD:		GPIO_Set_Mode((arg&0XF0)>>4,(arg&0X0F),GP_EXINT);break;
+		case GPIO_SET_BIT_CMD:		GPIO_Set_Bit((arg&0XF0)>>4,(arg&0X0F),1);break;
+		case GPIO_RESET_BIT_CMD:	GPIO_Set_Bit((arg&0XF0)>>4,(arg&0X0F),0);break;
+		case GPIO_READ_BIT_CMD:	break;
+		default:
+			return -EINVAL;
+	}
+	return 0;
+}
+
+struct file_operations hello_fops = {
+	.owner = THIS_MODULE,
+
+	.open 	= leds_open,
+	.unlocked_ioctl = leds_ioctl,
+};
+
+
+/**************************************************************************************/
+static int __init hello_init (void)
+{
+    int result;
+    devno = MKDEV(HELLO_MAJOR, HELLO_MINOR);
+    if (HELLO_MAJOR)
+        result = register_chrdev_region(devno, 2, "ledxy");
+    else
+    {
+        result = alloc_chrdev_region(&devno, 0, 2, "ledxy");
+        HELLO_MAJOR = MAJOR(devno);
+    }  
+    printk("MAJOR IS %d\n",HELLO_MAJOR);
+    my_class = class_create(THIS_MODULE,"ledxy_class");  //类名为
+    if(IS_ERR(my_class)) 
+    {
+        printk("Err: failed in creating class.\n");
+        return -1; 
+    }
+    device_create(my_class,NULL,devno,NULL,"ledxy");      //设备名为ledxy
+    if (result<0) 
+    {
+        printk (KERN_WARNING "hello: can't get major number %d\n", HELLO_MAJOR);
+        return result;
+    }
+ 
+    cdev_init(&cdev, &hello_fops);
+    cdev.owner = THIS_MODULE;
+    cdev_add(&cdev, devno, NUMBER_OF_DEVICES);
+    printk (KERN_INFO "Character driver Registered\n");
+    return 0;
+}
+ 
+static void __exit hello_exit (void)
+{
+    cdev_del (&cdev);
+    device_destroy(my_class, devno);         //delete device node under /dev//必须先删除设备，再删除class类
+    class_destroy(my_class);                 //delete class created by us
+    unregister_chrdev_region (devno,NUMBER_OF_DEVICES);
+    printk (KERN_INFO "char driver cleaned up\n");
+}
+ 
+module_init (hello_init);
+module_exit (hello_exit);
+ 
+MODULE_LICENSE ("GPL");
